@@ -1,4 +1,3 @@
-// Reference: 0Harmony
 /*▄▄▄    ███▄ ▄███▓  ▄████  ▄▄▄██▀▀▀▓█████▄▄▄█████▓
 ▓█████▄ ▓██▒▀█▀ ██▒ ██▒ ▀█▒   ▒██   ▓█   ▀▓  ██▒ ▓▒
 ▒██▒ ▄██▓██    ▓██░▒██░▄▄▄░   ░██   ▒███  ▒ ▓██░ ▒░
@@ -10,6 +9,7 @@
  ░             ░         ░  ░   ░      ░  */
 using HarmonyLib;
 using System;
+using Oxide.Core.Plugins;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -18,24 +18,29 @@ using System.Linq;
 using System.Reflection;
 using Oxide.Game.Rust.Cui;
 using UnityEngine;
-using Oxide.Core.Plugins;
 using System.Text;
+using Oxide.CSharp.Patching;
 namespace Oxide.Plugins
 {
-    [Info("AAAMethodTimer", "bmgjet", "1.0.0")]
+    [Info("AAAMethodTimer", "bmgjet", "1.0.1")]
     class AAAMethodTimer : RustPlugin
     {
         public Harmony harmony;
         public Coroutine coroutine = null;
         public static AAAMethodTimer plugin;
-        public IDictionary<MethodInfo, MethodLog> MethodRunTime = new Dictionary<MethodInfo, MethodLog>();
-        private IDictionary<MethodBase, MethodInfo> Patches = new Dictionary<MethodBase, MethodInfo>();
-        private List<string> Patched = new List<string>();
+        private IDictionary<string, AssemblyData> Patched = new Dictionary<string, AssemblyData>();
         public Stopwatch HookTimer = new Stopwatch();
         public bool TimerRunning = false;
         private bool ServerStarting = false;
         List<string> Blacklist;
         string[] BlacklistMethods = new string[] { "directcallhook", "movenext", "tostring", "memberwiseclone", "gettype", "gethashcode", "finalize", "equals", "isinvoking", "stopallcoroutines", "stopcoroutine", "startcoroutine", "adduniversalcommand", "addcovalencecommand", "raiseerror", "trackstart", "trackend", "<>m__finally1", "<>m__finally2", "system.idisposable.dispose", "system.collections.generic.ienumerator<system.object>.get_current", "system.collections.ienumerator.reset", "system.collections.ienumerator.get_current", "getcomponentsinchildren", "getcomponentsinparent", "printtoconsole", "printtochat", "sendreply", "getcomponentinchildren", "getcomponentinparent", "getcomponents", "sendmessageupwards", "sendmessage", "broadcastmessage", "get_name", "get_typeid" };
+
+        public class AssemblyData
+        {
+            public IDictionary<MethodInfo, MethodLog> MethodRunTime = new Dictionary<MethodInfo, MethodLog>();
+            public IDictionary<MethodBase, MethodInfo> Patches = new Dictionary<MethodBase, MethodInfo>();
+        }
+
 
         public class MethodLog
         {
@@ -55,6 +60,31 @@ namespace Oxide.Plugins
             Blacklist = files.Select(x => x.Name.Replace(".dll", "")).ToList();
             for (int i = Blacklist.Count - 1; i > 0; i--) { if (Blacklist[i].StartsWith("Oxide.Ext.")) { Blacklist.Remove(Blacklist[i]); } } //Allow Extensions
             Ready(); //check if ready
+        }
+
+        void OnPluginUnloaded(Plugin plugin)
+        {
+            for (int i = Patched.Count - 1; i >= 0; i--)
+            {
+                bool found = false;
+                foreach(var p in Patched.ElementAt(i).Value.Patches)
+                {
+                    if(p.Key.DeclaringType.Name.Contains(plugin.Name) && Patched.ElementAt(i).Value.Patches.Count > 0)
+                    {
+                        found = true; break;
+                    }
+                }
+                if(found)
+                {
+                    Puts("Unpatching Plugin " + plugin.Name);
+                    foreach (var p in Patched.ElementAt(i).Value.Patches)
+                    {
+                        harmony.Unpatch(p.Key, p.Value);
+                    }
+                    Patched.ElementAt(i).Value.Patches.Clear();
+                    Patched.ElementAt(i).Value.MethodRunTime.Clear();
+                }
+            }
         }
 
         private void Unload()
@@ -80,9 +110,6 @@ namespace Oxide.Plugins
             }
             //Patch Oxide Hook Caller
             Puts("Patching All Plugin Methods, Server May Freeze For A While!!!");
-            MethodBase OxideHookCounter = AccessTools.Method(typeof(CSharpPlugin), "InvokeMethod", new Type[] { typeof(HookMethod), typeof(object[]) });
-            Patches.Add(OxideHookCounter, harmony.Patch(OxideHookCounter, new HarmonyMethod(AccessTools.Method(typeof(AAAMethodTimer), nameof(DirectCallHookPrefix)))));
-
             if (ServerStarting) { ScanForNewAssemblys(); } //Server first start so thread lock doesnt matter to players
             coroutine = ServerMgr.Instance.StartCoroutine(Startup(true)); //Start checker
         }
@@ -105,16 +132,19 @@ namespace Oxide.Plugins
                 //Unload patches
                 if (harmony != null)
                 {
-                    Puts("UnPatching " + Patches.Count + " Pre/Post Fixes Might Take A While And Freeze/Kick Players");
+                    Puts("UnPatching " + Patched.Count + " Assemblies Might Take A While And Freeze/Kick Players");
                     int patchChecks = 0;
-                    foreach (var p in Patches)
+                    foreach (var patch in Patched)
                     {
-                        if (patchChecks++ > 50)
+                        foreach (var p in patch.Value.Patches)
                         {
-                            yield return CoroutineEx.waitForSeconds(0.01f); //Attempt to prevent freeze
-                            patchChecks = 0;
+                            if (patchChecks++ > 50)
+                            {
+                                yield return CoroutineEx.waitForSeconds(0.01f); //Attempt to prevent freeze
+                                patchChecks = 0;
+                            }
+                            harmony.Unpatch(p.Key, p.Value);
                         }
-                        harmony.Unpatch(p.Key, p.Value);
                     }
                 }
             }
@@ -156,9 +186,12 @@ namespace Oxide.Plugins
             {
                 if (arg.Player().IsAdmin)
                 {
-                    MethodRunTime.Clear();
-                    arg.Player().ChatMessage("Cleared Logging Info");
-                    CuiHelper.DestroyUi(arg.Player(), "MTUI");
+                    foreach (var p in Patched.Values)
+                    {
+                        p.MethodRunTime.Clear();
+                        arg.Player().ChatMessage("Cleared Logging Info");
+                        CuiHelper.DestroyUi(arg.Player(), "MTUI");
+                    }
                 }
             }
         }
@@ -348,7 +381,7 @@ namespace Oxide.Plugins
                     string ParentType = Parent?.Name;
                     while (Parent.DeclaringType != null)
                     {
-                        ParentType = Parent.DeclaringType?.Name + "/"+ ParentType;
+                        ParentType = Parent.DeclaringType?.Name + "/" + ParentType;
                         Parent = Parent.DeclaringType;
                     }
                     container.Add(new CuiElement
@@ -417,49 +450,55 @@ namespace Oxide.Plugins
         private Dictionary<MethodInfo, MethodLog> CleanAndSort()
         {
             var Clean = new Dictionary<MethodInfo, MethodLog>();
-            foreach (var methodinfo in MethodRunTime) //Read Out Direct Hook Info (More Accurate)
+            foreach (var p in Patched.Values)
             {
-                if (methodinfo.Key.Name.EndsWith(")")) { Clean.Add(methodinfo.Key, methodinfo.Value); }
-            }
-            foreach (var methodinfo in MethodRunTime) //Add the rest but not duplcates that have a direct hook value already
-            {
-                bool c = false;
-                foreach (var k in Clean.Keys)
+                foreach (var methodinfo in p.MethodRunTime) //Read Out Direct Hook Info (More Accurate)
                 {
-                    if (k.Name.Contains(methodinfo.Key.Name))
-                    {
-                        c = true;
-                        break;
-                    }
+                    if (methodinfo.Key.Name.EndsWith(")")) { Clean.Add(methodinfo.Key, methodinfo.Value); }
                 }
-                if (!c) { Clean.Add(methodinfo.Key, methodinfo.Value); }
+                foreach (var methodinfo in p.MethodRunTime) //Add the rest but not duplcates that have a direct hook value already
+                {
+                    bool c = false;
+                    foreach (var k in Clean.Keys)
+                    {
+                        if (k.Name.Contains(methodinfo.Key.Name))
+                        {
+                            c = true;
+                            break;
+                        }
+                    }
+                    if (!c) { Clean.Add(methodinfo.Key, methodinfo.Value); }
+                }
             }
             return Clean.Keys.OrderBy(k => k.DeclaringType.Name).ToDictionary(k => k, k => Clean[k]);
         }
 
         private void SaveInfo(BasePlayer player = null)
         {
-            if (MethodRunTime != null && MethodRunTime.Count > 0)
+            foreach (var p in Patched.Values)
             {
-                string datastring = "Plugin Name,Method Name,AVG Time[ms],Total Time[ms],#Invokes" + System.Environment.NewLine;
-                foreach (var data in CleanAndSort())
+                if (p.MethodRunTime != null && p.MethodRunTime.Count > 0)
                 {
-                    Type Parent = data.Key.DeclaringType;
-                    string ParentType = Parent?.Name;
-                    while (Parent.DeclaringType != null)
+                    string datastring = "Plugin Name,Method Name,AVG Time[ms],Total Time[ms],#Invokes" + System.Environment.NewLine;
+                    foreach (var data in CleanAndSort())
                     {
-                        ParentType = Parent.DeclaringType?.Name + "/" + ParentType;
-                        Parent = Parent.DeclaringType;
+                        Type Parent = data.Key.DeclaringType;
+                        string ParentType = Parent?.Name;
+                        while (Parent.DeclaringType != null)
+                        {
+                            ParentType = Parent.DeclaringType?.Name + "/" + ParentType;
+                            Parent = Parent.DeclaringType;
+                        }
+                        try
+                        {
+                            datastring += ParentType + "," + data.Key.Name + "," + (data.Value.TotalHookTime.TotalMilliseconds / (double)data.Value.HookCount) + "," + data.Value.TotalHookTime.TotalMilliseconds + "," + data.Value.HookCount.ToString() + System.Environment.NewLine;
+                        }
+                        catch { }
                     }
-                    try
-                    {
-                        datastring += ParentType + "," + data.Key.Name + "," + (data.Value.TotalHookTime.TotalMilliseconds / (double)data.Value.HookCount) + "," + data.Value.TotalHookTime.TotalMilliseconds + "," + data.Value.HookCount.ToString() + System.Environment.NewLine;
-                    }
-                    catch { }
+                    File.WriteAllText(GetBackupPath("Method", DateTime.Now), datastring);
+                    Puts("Saved Data For " + p.MethodRunTime.Count.ToString() + " Methods");
+                    if (player != null) { player.ChatMessage("Saved Data For " + p.MethodRunTime.Count.ToString() + " Methods"); }
                 }
-                File.WriteAllText(GetBackupPath("Method", DateTime.Now), datastring);
-                Puts("Saved Data For " + MethodRunTime.Count.ToString() + " Methods");
-                if (player != null) { player.ChatMessage("Saved Data For " + MethodRunTime.Count.ToString() + " Methods"); }
             }
         }
 
@@ -502,7 +541,8 @@ namespace Oxide.Plugins
             {
                 if (assembly == null) { continue; }
                 string n = assembly?.GetName()?.Name;
-                if (string.IsNullOrEmpty(n) || Blacklist.Contains(n) || Patched.Contains(n)) { continue; } //Only Target harmony and oxide plugins/extentions
+                if (string.IsNullOrEmpty(n) || Blacklist.Contains(n) || Patched.ContainsKey(n)) { continue; } //Only Target harmony and oxide plugins/extentions
+                AssemblyData assemblyData = new AssemblyData();
                 foreach (Type type in assembly.GetTypes()) //get all types
                 {
                     try
@@ -517,7 +557,7 @@ namespace Oxide.Plugins
                                     try
                                     {
                                         //Add pre/postfix stopwatch
-                                        Patches.Add(mi2, harmony.Patch(mi2, new HarmonyMethod(AccessTools.Method(typeof(AAAMethodTimer), "Prefix")), new HarmonyMethod(AccessTools.Method(typeof(AAAMethodTimer), "Postfix"))));
+                                        assemblyData.Patches.Add(mi2, harmony.Patch(mi2, new HarmonyMethod(AccessTools.Method(typeof(AAAMethodTimer), "Prefix")), new HarmonyMethod(AccessTools.Method(typeof(AAAMethodTimer), "Postfix"))));
                                         patched++;
                                     }
                                     catch { }
@@ -527,7 +567,7 @@ namespace Oxide.Plugins
                     }
                     catch { }
                 }
-                Patched.Add(n); //Add to list so dont check it again.
+                Patched.Add(n, assemblyData); //Add to list so dont check it again.
             }
             if (patched != 0) { Puts("Patched " + patched + " Methods"); } //Only Output on new patches added
         }
@@ -540,7 +580,8 @@ namespace Oxide.Plugins
             {
                 if (assembly == null) { continue; }
                 string n = assembly?.GetName()?.Name;
-                if (string.IsNullOrEmpty(n) || Blacklist.Contains(n) || Patched.Contains(n)) { continue; }
+                if (string.IsNullOrEmpty(n) || Blacklist.Contains(n) || Patched.ContainsKey(n)) { continue; }
+                AssemblyData assemblyData = new AssemblyData();
                 foreach (Type type in assembly.GetTypes())
                 {
                     if (type == null || string.IsNullOrEmpty(type?.Name)) { continue; }
@@ -558,7 +599,7 @@ namespace Oxide.Plugins
                             {
                                 try
                                 {
-                                    Patches.Add(mi2, harmony.Patch(mi2, new HarmonyMethod(AccessTools.Method(typeof(AAAMethodTimer), "Prefix")), new HarmonyMethod(AccessTools.Method(typeof(AAAMethodTimer), "Postfix"))));
+                                    assemblyData.Patches.Add(mi2, harmony.Patch(mi2, new HarmonyMethod(AccessTools.Method(typeof(AAAMethodTimer), "Prefix")), new HarmonyMethod(AccessTools.Method(typeof(AAAMethodTimer), "Postfix"))));
                                     patched++;
                                 }
                                 catch { }
@@ -566,7 +607,7 @@ namespace Oxide.Plugins
                         }
                     }
                 }
-                Patched.Add(n);
+                Patched.Add(n, assemblyData);
             }
             if (patched != 0) { Puts("Patched " + patched + " New Methods"); }
         }
@@ -626,26 +667,32 @@ namespace Oxide.Plugins
                 HookTimer.Stop();
                 TimerRunning = false;
                 if (__instance.Name == "AAAMethodTimer") { return; } //Dont log self
-                if (plugin.MethodRunTime.ContainsKey(method.Method)) { plugin.MethodRunTime[method.Method].TotalHookTime = plugin.MethodRunTime[method.Method].TotalHookTime.Add(HookTimer.Elapsed); plugin.MethodRunTime[method.Method].HookCount++; }
-                else { plugin.MethodRunTime.Add(method.Method, new MethodLog(HookTimer.Elapsed, 1)); }
+                foreach (var p in Patched.Values)
+                {
+                    if (p.MethodRunTime.ContainsKey(method.Method)) { p.MethodRunTime[method.Method].TotalHookTime = p.MethodRunTime[method.Method].TotalHookTime.Add(HookTimer.Elapsed); p.MethodRunTime[method.Method].HookCount++; }
+                    else { p.MethodRunTime.Add(method.Method, new MethodLog(HookTimer.Elapsed, 1)); }
+                }
             }
         }
 
         #endregion
 
         #region Harmony
-
-        static bool DirectCallHookPrefix(HookMethod method, object[] args, CSharpPlugin __instance, ref object __result)
+        [AutoPatch]
+        [HarmonyPatch(typeof(CSharpPlugin), "InvokeMethod", typeof(HookMethod), typeof(object[]))]
+        internal class Performance_Update
         {
-            try
+            static bool Prefix(HookMethod method, object[] args, CSharpPlugin __instance, ref object __result)
             {
-                plugin.HookPerformance(method, args, __instance, ref __result);
-                return false;
+                try
+                {
+                    plugin.HookPerformance(method, args, __instance, ref __result);
+                    return false;
+                }
+                catch { }
+                return true;
             }
-            catch { }
-            return true;
         }
-
 
         static void Prefix(out Stopwatch __state)
         {
@@ -668,8 +715,11 @@ namespace Oxide.Plugins
                 {
                     if (plugin != null)
                     {
-                        if (plugin.MethodRunTime.ContainsKey(__originalMethod)) { plugin.MethodRunTime[__originalMethod].TotalHookTime = plugin.MethodRunTime[__originalMethod].TotalHookTime.Add(__state.Elapsed); plugin.MethodRunTime[__originalMethod].HookCount++; }
-                        else { plugin.MethodRunTime.Add(__originalMethod, new MethodLog(__state.Elapsed, 1)); }
+                        foreach (var p in plugin.Patched.Values)
+                        {
+                            if (p.MethodRunTime.ContainsKey(__originalMethod)) { p.MethodRunTime[__originalMethod].TotalHookTime = p.MethodRunTime[__originalMethod].TotalHookTime.Add(__state.Elapsed); p.MethodRunTime[__originalMethod].HookCount++; }
+                            else { p.MethodRunTime.Add(__originalMethod, new MethodLog(__state.Elapsed, 1)); }
+                        }
                     }
                 }
                 catch { }
