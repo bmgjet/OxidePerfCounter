@@ -19,7 +19,6 @@ using System.Reflection;
 using Oxide.Game.Rust.Cui;
 using UnityEngine;
 using System.Text;
-using Oxide.CSharp.Patching;
 namespace Oxide.Plugins
 {
     [Info("AAAMethodTimer", "bmgjet", "1.0.1")]
@@ -33,7 +32,7 @@ namespace Oxide.Plugins
         public bool TimerRunning = false;
         private bool ServerStarting = false;
         List<string> Blacklist;
-        string[] BlacklistMethods = new string[] { "directcallhook", "movenext", "tostring", "memberwiseclone", "gettype", "gethashcode", "finalize", "equals", "isinvoking", "stopallcoroutines", "stopcoroutine", "startcoroutine", "adduniversalcommand", "addcovalencecommand", "raiseerror", "trackstart", "trackend", "<>m__finally1", "<>m__finally2", "system.idisposable.dispose", "system.collections.generic.ienumerator<system.object>.get_current", "system.collections.ienumerator.reset", "system.collections.ienumerator.get_current", "getcomponentsinchildren", "getcomponentsinparent", "printtoconsole", "printtochat", "sendreply", "getcomponentinchildren", "getcomponentinparent", "getcomponents", "sendmessageupwards", "sendmessage", "broadcastmessage", "get_name", "get_typeid" };
+        string[] BlacklistMethods = new string[] { "directcallhook", "movenext", "tostring", "memberwiseclone", "gettype", "gethashcode", "finalize", "equals", "isinvoking", "stopallcoroutines", "stopcoroutine", "startcoroutine", "adduniversalcommand", "addcovalencecommand", "raiseerror", "trackstart", "trackend", "<>m__finally1", "<>m__finally2", "system.idisposable.dispose", "system.collections.generic.ienumerator<system.object>.get_current", "system.collections.ienumerator.reset", "system.collections.ienumerator.get_current", "getcomponentsinchildren", "getcomponentsinparent", "printtoconsole", "printtochat", "sendreply", "getcomponentinchildren", "getcomponentinparent", "getcomponents", "sendmessageupwards", "sendmessage", "broadcastmessage", "get_name", "get_typeid"};
 
         public class AssemblyData
         {
@@ -41,12 +40,19 @@ namespace Oxide.Plugins
             public IDictionary<MethodBase, MethodInfo> Patches = new Dictionary<MethodBase, MethodInfo>();
         }
 
+        public class DataRecord
+        {
+            public Stopwatch stopwatch = new Stopwatch();
+            public long memory = 0;
+            public DataRecord Init() { stopwatch.Start(); return this; }
+        }
 
         public class MethodLog
         {
             public TimeSpan TotalHookTime = new TimeSpan();
             public int HookCount = 0;
-            public MethodLog(TimeSpan totalHookTime, int hookCount) { TotalHookTime = totalHookTime; HookCount = hookCount; }
+            public long MemoryAllocations = 0;
+            public MethodLog(TimeSpan totalHookTime, int hookCount, long MemUse) { TotalHookTime = totalHookTime; HookCount = hookCount; MemoryAllocations = MemUse; }
         }
         #region Oxide Hooks
 
@@ -64,17 +70,18 @@ namespace Oxide.Plugins
 
         void OnPluginUnloaded(Plugin plugin)
         {
+            if (plugin.Name == Name){return;}
             for (int i = Patched.Count - 1; i >= 0; i--)
             {
                 bool found = false;
-                foreach(var p in Patched.ElementAt(i).Value.Patches)
+                foreach (var p in Patched.ElementAt(i).Value.Patches)
                 {
-                    if(p.Key.DeclaringType.Name.Contains(plugin.Name) && Patched.ElementAt(i).Value.Patches.Count > 0)
+                    if (p.Key.DeclaringType.Name.Contains(plugin.Name) && Patched.ElementAt(i).Value.Patches.Count > 0)
                     {
                         found = true; break;
                     }
                 }
-                if(found)
+                if (found)
                 {
                     Puts("Unpatching Plugin " + plugin.Name);
                     foreach (var p in Patched.ElementAt(i).Value.Patches)
@@ -186,12 +193,9 @@ namespace Oxide.Plugins
             {
                 if (arg.Player().IsAdmin)
                 {
-                    foreach (var p in Patched.Values)
-                    {
-                        p.MethodRunTime.Clear();
-                        arg.Player().ChatMessage("Cleared Logging Info");
-                        CuiHelper.DestroyUi(arg.Player(), "MTUI");
-                    }
+                    foreach (var p in Patched.Values){p.MethodRunTime.Clear();}
+                    arg.Player().ChatMessage("Cleared Logging Info");
+                    CuiHelper.DestroyUi(arg.Player(), "MTUI");
                 }
             }
         }
@@ -240,7 +244,7 @@ namespace Oxide.Plugins
                 Parent = "MTUI",
                 Components = {
                         new CuiRawImageComponent
-                        {Sprite = "", Color = ".25 .25 .25 1",},
+                        {Sprite = "assets/content/ui/ui.background.transparent.radial.psd", Color = ".25 .25 .25 1",},
                         new CuiRectTransformComponent { AnchorMin = "0 1", AnchorMax = "1 1", OffsetMin = "0 -50", OffsetMax = "-18 0"},
                         }
             });
@@ -266,7 +270,7 @@ namespace Oxide.Plugins
                     Components = {
                         new CuiRawImageComponent
                         {
-                        Sprite = "",
+                            Sprite = "assets/content/ui/ui.background.transparent.radial.psd",
                         Color = ".2 .2 .2 1",
                         },
                         new CuiRectTransformComponent { AnchorMin = ".03 .97", AnchorMax = ".97 .97", OffsetMin = "0 " + (offset - 24).ToString(), OffsetMax = "0 " + name},
@@ -344,7 +348,7 @@ namespace Oxide.Plugins
                     Parent = "MTUI",
                     Components = {
                         new CuiRawImageComponent
-                        {Sprite = "", Color = ".25 .25 .25 1",},
+                        {Sprite = "assets/content/ui/ui.background.transparent.radial.psd", Color = ".25 .25 .25 1",},
                         new CuiRectTransformComponent { AnchorMin = "0 1", AnchorMax = "1 1", OffsetMin = "0 -50",OffsetMax = "-18 0"},
                         }
                 });
@@ -354,7 +358,7 @@ namespace Oxide.Plugins
                     Name = "TT",
                     Parent = "MTUI",
                     Components = {
-                    new CuiTextComponent { Text = PadBoth("Plugin Name", 40) + PadBoth("Method Name", 40) + PadBoth("AVG [ms]", 15) + PadBoth("Total [ms]", 15) + PadBoth("#Invokes", 10), Font = "droidsansmono.ttf", FontSize = 14, Align = TextAnchor.MiddleCenter },
+                    new CuiTextComponent { Text = PadBoth("Plugin Name", 35) + PadBoth("Method Name", 35) + PadBoth("AVG [ms]", 15) + PadBoth("Total [ms]", 15) + PadBoth("#Invokes", 10) + PadBoth("Memory", 10), Font = "droidsansmono.ttf", FontSize = 14, Align = TextAnchor.MiddleCenter },
                     new CuiOutlineComponent { Color = "0 0 0 1", Distance = "1 1" },
                     new CuiRectTransformComponent { AnchorMin = "0 1", AnchorMax = "1 1", OffsetMin = "0 -50",OffsetMax = "-18 0" },
                 }
@@ -370,7 +374,7 @@ namespace Oxide.Plugins
                         Components = {
                         new CuiRawImageComponent
                         {
-                        Sprite = "",
+                            Sprite = "assets/content/ui/ui.background.transparent.radial.psd",
                         Color = ".2 .2 .2 1",
                         },
                         new CuiRectTransformComponent { AnchorMin = ".03 .97", AnchorMax = ".97 .97", OffsetMin = "0 " + (offset - 24).ToString(), OffsetMax = "0 " + name},
@@ -389,7 +393,7 @@ namespace Oxide.Plugins
                         Name = "_" + name,
                         Parent = name,
                         Components = {
-                        new CuiTextComponent { Text = PadBoth(ParentType, 40).PadLeft(0) + PadBoth(data.Key.Name, 50) + PadBoth((data.Value.TotalHookTime.TotalMilliseconds / (double)data.Value.HookCount).ToString("0.0000"), 20) + PadBoth(data.Value.TotalHookTime.TotalMilliseconds.ToString("0.0000"), 20) + PadBoth(data.Value.HookCount.ToString(), 10), Font = "droidsansmono.ttf", FontSize = 12, Align = TextAnchor.MiddleCenter },
+                        new CuiTextComponent { Text = PadBoth(ParentType, 35).PadLeft(0) + PadBoth(data.Key.Name, 45) + PadBoth((data.Value.TotalHookTime.TotalMilliseconds / (double)data.Value.HookCount).ToString("0.0000"), 20) + PadBoth(data.Value.TotalHookTime.TotalMilliseconds.ToString("0.0000"), 20) + PadBoth(data.Value.HookCount.ToString(), 10) + PadBoth(data.Value.MemoryAllocations.ToString("0"), 10), Font = "droidsansmono.ttf", FontSize = 12, Align = TextAnchor.MiddleCenter },
                         new CuiRectTransformComponent { AnchorMin = "0 0", AnchorMax = "1 1"},
                         }
                     });
@@ -461,13 +465,24 @@ namespace Oxide.Plugins
                     bool c = false;
                     foreach (var k in Clean.Keys)
                     {
-                        if (k.Name.Contains(methodinfo.Key.Name))
+                        Type Parent = methodinfo.Key.DeclaringType;
+                        string ParentType = Parent?.Name;
+                        while (Parent.DeclaringType != null)
+                        {
+                            ParentType = Parent.DeclaringType?.Name + "/" + ParentType;
+                            Parent = Parent.DeclaringType;
+                        }
+                        if (k.Name.Contains(methodinfo.Key.Name) || ParentType.Contains(Name))
                         {
                             c = true;
                             break;
                         }
                     }
-                    if (!c) { Clean.Add(methodinfo.Key, methodinfo.Value); }
+                    if (!c && !Clean.ContainsKey(methodinfo.Key))
+                    {
+                        if(methodinfo.Value.MemoryAllocations < 0){methodinfo.Value.MemoryAllocations = 0;}
+                        Clean.Add(methodinfo.Key, methodinfo.Value);
+                    }
                 }
             }
             return Clean.Keys.OrderBy(k => k.DeclaringType.Name).ToDictionary(k => k, k => Clean[k]);
@@ -475,11 +490,12 @@ namespace Oxide.Plugins
 
         private void SaveInfo(BasePlayer player = null)
         {
+            int methods = 0;
             foreach (var p in Patched.Values)
             {
                 if (p.MethodRunTime != null && p.MethodRunTime.Count > 0)
                 {
-                    string datastring = "Plugin Name,Method Name,AVG Time[ms],Total Time[ms],#Invokes" + System.Environment.NewLine;
+                    string datastring = "Plugin Name,Method Name,AVG Time[ms],Total Time[ms],#Invokes,Memory Allocations" + System.Environment.NewLine;
                     foreach (var data in CleanAndSort())
                     {
                         Type Parent = data.Key.DeclaringType;
@@ -491,15 +507,16 @@ namespace Oxide.Plugins
                         }
                         try
                         {
-                            datastring += ParentType + "," + data.Key.Name + "," + (data.Value.TotalHookTime.TotalMilliseconds / (double)data.Value.HookCount) + "," + data.Value.TotalHookTime.TotalMilliseconds + "," + data.Value.HookCount.ToString() + System.Environment.NewLine;
+                            datastring += ParentType + "," + data.Key.Name + "," + (data.Value.TotalHookTime.TotalMilliseconds / (double)data.Value.HookCount) + "," + data.Value.TotalHookTime.TotalMilliseconds + "," + data.Value.HookCount.ToString() + "," + data.Value.MemoryAllocations + System.Environment.NewLine;
                         }
                         catch { }
                     }
+                    methods += p.MethodRunTime.Count;
                     File.WriteAllText(GetBackupPath("Method", DateTime.Now), datastring);
-                    Puts("Saved Data For " + p.MethodRunTime.Count.ToString() + " Methods");
-                    if (player != null) { player.ChatMessage("Saved Data For " + p.MethodRunTime.Count.ToString() + " Methods"); }
                 }
             }
+            Puts("Saved Data For " + methods + " Methods");
+            if (player != null) { player.ChatMessage("Saved Data For " + methods + " Methods"); }
         }
 
         private void SavePluginInfo(BasePlayer player = null)
@@ -595,7 +612,8 @@ namespace Oxide.Plugins
                                 else { yield return CoroutineEx.waitForSeconds(0.003f); }
                                 Checks = 0;
                             }
-                            if (!BlacklistMethods.Contains(mi2?.Name.ToLower()))
+                            string name = mi2?.DeclaringType?.Name;
+                            if (!BlacklistMethods.Contains(mi2?.Name.ToLower()) && !name.Contains(Name))
                             {
                                 try
                                 {
@@ -621,6 +639,7 @@ namespace Oxide.Plugins
                 TimerRunning = true;
                 HookTimer.Restart();
             }
+            long Memory = -1;
             try
             {
                 if (!method.IsBaseHook && args != null && args.Length != 0)
@@ -666,11 +685,11 @@ namespace Oxide.Plugins
             {
                 HookTimer.Stop();
                 TimerRunning = false;
-                if (__instance.Name == "AAAMethodTimer") { return; } //Dont log self
+                if (__instance.Name.Contains(Name)) { return; } //Dont log self
                 foreach (var p in Patched.Values)
                 {
-                    if (p.MethodRunTime.ContainsKey(method.Method)) { p.MethodRunTime[method.Method].TotalHookTime = p.MethodRunTime[method.Method].TotalHookTime.Add(HookTimer.Elapsed); p.MethodRunTime[method.Method].HookCount++; }
-                    else { p.MethodRunTime.Add(method.Method, new MethodLog(HookTimer.Elapsed, 1)); }
+                    if (p.MethodRunTime.ContainsKey(method.Method)) { p.MethodRunTime[method.Method].MemoryAllocations += Memory; p.MethodRunTime[method.Method].TotalHookTime = p.MethodRunTime[method.Method].TotalHookTime.Add(HookTimer.Elapsed); p.MethodRunTime[method.Method].HookCount++; }
+                    else { p.MethodRunTime.Add(method.Method, new MethodLog(HookTimer.Elapsed, 1, Memory)); }
                 }
             }
         }
@@ -694,31 +713,32 @@ namespace Oxide.Plugins
             }
         }
 
-        static void Prefix(out Stopwatch __state)
+        static void Prefix(out DataRecord __state)
         {
             try
             {
-                __state = new Stopwatch(); // assign your own state
-                __state.Start();
+                __state = new DataRecord(); // assign your own state
+                __state.memory = GC.GetTotalMemory(false);
+                __state.stopwatch = Stopwatch.StartNew();
                 return;
             }
             catch { }
             __state = null;
         }
 
-        static void Postfix(Stopwatch __state, MethodInfo __originalMethod)
+        static void Postfix(DataRecord __state, MethodInfo __originalMethod)
         {
             if (__state != null)
             {
-                __state.Stop();
+                __state.stopwatch.Stop();
                 try
                 {
                     if (plugin != null)
                     {
                         foreach (var p in plugin.Patched.Values)
                         {
-                            if (p.MethodRunTime.ContainsKey(__originalMethod)) { p.MethodRunTime[__originalMethod].TotalHookTime = p.MethodRunTime[__originalMethod].TotalHookTime.Add(__state.Elapsed); p.MethodRunTime[__originalMethod].HookCount++; }
-                            else { p.MethodRunTime.Add(__originalMethod, new MethodLog(__state.Elapsed, 1)); }
+                            if (p.MethodRunTime.ContainsKey(__originalMethod)) { p.MethodRunTime[__originalMethod].TotalHookTime = p.MethodRunTime[__originalMethod].TotalHookTime.Add(__state.stopwatch.Elapsed); p.MethodRunTime[__originalMethod].HookCount++; p.MethodRunTime[__originalMethod].MemoryAllocations += (GC.GetTotalMemory(false) - __state.memory) / 1024; }
+                            else { p.MethodRunTime.Add(__originalMethod, new MethodLog(__state.stopwatch.Elapsed, 1, (GC.GetTotalMemory(false) - __state.memory) / 1024)); }
                         }
                     }
                 }
